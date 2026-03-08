@@ -4,6 +4,8 @@ import json
 from datetime import datetime
 from github import Github, GithubException
 import requests
+import qrcode
+from io import BytesIO
 
 # ============================================
 # CONFIGURAÇÃO INICIAL
@@ -31,17 +33,17 @@ st.markdown("""
     .selo-card {
         background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%);
         padding: 2rem;
-        border-radius: 15px;
+        border-radius: 18px;
         color: white;
         text-align: center;
-        margin: 2rem 0;
+        margin: 1.5rem 0;
         box-shadow: 0 4px 15px rgba(0,0,0,0.2);
     }
     .selo-badge {
         background: #00c853;
         color: white;
-        padding: 5px 15px;
-        border-radius: 20px;
+        padding: 6px 16px;
+        border-radius: 999px;
         font-weight: bold;
         display: inline-block;
         margin: 10px 0;
@@ -77,21 +79,63 @@ st.markdown("""
         background: #f5f5f5;
         color: #111;
         padding: 20px;
-        border-radius: 10px;
+        border-radius: 12px;
         margin: 20px 0;
         border-left: 5px solid #1e3a5f;
     }
     .mini-muted {
-        opacity: 0.85;
-        font-size: 0.9rem;
+        opacity: 0.88;
+        font-size: 0.92rem;
     }
     .public-box {
         background: #eef7ff;
         color: #111;
         padding: 16px;
-        border-radius: 10px;
+        border-radius: 12px;
         border-left: 5px solid #1976d2;
         margin: 15px 0;
+    }
+    .cert-box {
+        background: linear-gradient(180deg, #ffffff 0%, #f6f9fc 100%);
+        color: #111;
+        padding: 24px;
+        border-radius: 18px;
+        border: 1px solid #dbe3ea;
+        margin: 20px 0;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.06);
+    }
+    .cert-title {
+        font-size: 1.4rem;
+        font-weight: 700;
+        margin-bottom: 6px;
+    }
+    .cert-subtitle {
+        font-size: 0.95rem;
+        color: #46515c;
+        margin-bottom: 18px;
+    }
+    .cert-line {
+        padding: 10px 0;
+        border-bottom: 1px solid #e7edf2;
+    }
+    .hash-box {
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 14px;
+        border-radius: 10px;
+        font-family: monospace;
+        font-size: 0.9rem;
+        overflow-wrap: break-word;
+        margin-top: 10px;
+    }
+    .badge-code {
+        background: #111827;
+        color: #e5e7eb;
+        padding: 12px;
+        border-radius: 10px;
+        font-family: monospace;
+        font-size: 0.9rem;
+        overflow-wrap: break-word;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -113,6 +157,7 @@ if "verificacoes_feitas" not in st.session_state:
 github_token = st.secrets["GITHUB_TOKEN"] if "GITHUB_TOKEN" in st.secrets else ""
 github_username = st.secrets["GITHUB_USERNAME"] if "GITHUB_USERNAME" in st.secrets else ""
 github_repo_name = st.secrets["GITHUB_REPO"] if "GITHUB_REPO" in st.secrets else DEFAULT_REPO_NAME
+app_base_url = st.secrets["APP_BASE_URL"] if "APP_BASE_URL" in st.secrets else "http://localhost:8501"
 
 # ============================================
 # FUNÇÕES UTILITÁRIAS
@@ -131,7 +176,7 @@ def gerar_metadados(conteudo: str, autor: str, tipo: str, hash_value: str) -> di
         "tipo": tipo,
         "data_criacao_utc": agora,
         "tamanho_bytes": len(conteudo.encode("utf-8")),
-        "versao": "1.1.0",
+        "versao": "1.2.0",
         "plataforma": APP_NAME
     }
 
@@ -204,10 +249,48 @@ def gerar_links_publicos(hash_value: str, username: str, repo_name: str):
 
 
 def gerar_link_verificacao(hash_value: str):
-    base_url = st.query_params.get("base_url", "")
-    if base_url:
-        return f"{base_url}?hash={hash_value}"
-    return f"?hash={hash_value}"
+    base = app_base_url.rstrip("/")
+    return f"{base}/?hash={hash_value}"
+
+
+def gerar_badge_html(hash_value: str):
+    verify_url = gerar_link_verificacao(hash_value)
+    return f'<a href="{verify_url}" target="_blank" rel="noopener noreferrer">✅ Verificado por Selo Veraz</a>'
+
+
+def gerar_qr_code_bytes(texto: str):
+    qr = qrcode.QRCode(
+        version=1,
+        box_size=10,
+        border=4
+    )
+    qr.add_data(texto)
+    qr.make(fit=True)
+
+    img = qr.make_image(fill_color="black", back_color="white")
+    buffer = BytesIO()
+    img.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def gerar_certificado_publico(metadados: dict, link_verificacao: str):
+    certificado = {
+        "selo_veraz": {
+            "status": "verificado",
+            "tagline": APP_TAGLINE,
+            "id": metadados.get("id"),
+            "hash": metadados.get("hash"),
+            "autor": metadados.get("autor"),
+            "tipo": metadados.get("tipo"),
+            "data_criacao_utc": metadados.get("data_criacao_utc"),
+            "tamanho_bytes": metadados.get("tamanho_bytes"),
+            "versao": metadados.get("versao"),
+            "plataforma": metadados.get("plataforma"),
+            "link_verificacao": link_verificacao
+        }
+    }
+    return certificado
 
 
 def commit_selo_github(repo, hash_value: str, metadados: dict):
@@ -338,6 +421,32 @@ def exibir_resultado_verificacao_publica(resultado: dict):
 
         st.caption(resultado.get("mensagem", "Nenhuma informação adicional."))
 
+
+def exibir_certificado_visual(metadados: dict, link_verificacao: str):
+    hash_value = metadados.get("hash", "")
+    hash_curto = f"{hash_value[:12]}...{hash_value[-12:]}" if len(hash_value) > 24 else hash_value
+
+    st.markdown(f"""
+    <div class="cert-box">
+        <div class="cert-title">🏷️ Certificado Selo Veraz</div>
+        <div class="cert-subtitle">{APP_TAGLINE}</div>
+
+        <div class="cert-line"><strong>Status:</strong> Verificado</div>
+        <div class="cert-line"><strong>Autor:</strong> {metadados.get("autor", "Anônimo")}</div>
+        <div class="cert-line"><strong>Tipo:</strong> {metadados.get("tipo", "N/D")}</div>
+        <div class="cert-line"><strong>Data UTC:</strong> {metadados.get("data_criacao_utc", "N/D")}</div>
+        <div class="cert-line"><strong>Tamanho:</strong> {metadados.get("tamanho_bytes", 0)} bytes</div>
+        <div class="cert-line"><strong>Versão:</strong> {metadados.get("versao", "N/D")}</div>
+        <div class="cert-line"><strong>Hash resumido:</strong> {hash_curto}</div>
+
+        <div style="margin-top: 16px;"><strong>Link de verificação:</strong></div>
+        <div class="hash-box">{link_verificacao}</div>
+
+        <div style="margin-top: 16px;"><strong>Hash completo:</strong></div>
+        <div class="hash-box">{hash_value}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
 # ============================================
 # QUERY PARAMS
 # ============================================
@@ -375,6 +484,10 @@ with st.sidebar:
         github_username = st.text_input("Usuário GitHub público:")
 
     st.markdown("---")
+    st.markdown("### 🌐 App")
+    st.caption(app_base_url)
+
+    st.markdown("---")
     st.markdown("### 📊 Estatísticas")
     st.metric("Selos Gerados", st.session_state["selos_gerados"])
     st.metric("Verificações", st.session_state["verificacoes_feitas"])
@@ -385,7 +498,7 @@ with st.sidebar:
 
 if page == "🔐 Gerar Selo":
     st.title("🔐 Gerar Selo Veraz")
-    st.markdown("Crie uma impressão digital imutável e registre no GitHub.")
+    st.markdown("Crie uma impressão digital imutável, gere certificado visual e registre no GitHub.")
 
     col1, col2 = st.columns([3, 1])
 
@@ -412,6 +525,10 @@ if page == "🔐 Gerar Selo":
 
             hash_conteudo = gerar_hash_conteudo(texto)
             metadados = gerar_metadados(texto, autor, tipo_conteudo, hash_conteudo)
+            link_publico = gerar_link_verificacao(hash_conteudo)
+            badge_html = gerar_badge_html(hash_conteudo)
+            qr_bytes = gerar_qr_code_bytes(link_publico)
+            certificado = gerar_certificado_publico(metadados, link_publico)
 
             st.markdown("""
             <div class="selo-card">
@@ -423,12 +540,40 @@ if page == "🔐 Gerar Selo":
 
             st.markdown("### 🔑 Hash SHA-256")
             st.code(hash_conteudo, language="text")
-            st.caption("💡 Clique no ícone 📋 no canto do bloco para copiar")
 
-            link_publico = gerar_link_verificacao(hash_conteudo)
-            st.markdown("### 🔗 Link de verificação")
+            st.markdown("### 🔗 Link completo de verificação")
             st.code(link_publico, language="text")
-            st.caption("Esse link poderá ser compartilhado para verificação pública.")
+
+            col_qr, col_info = st.columns([1, 2])
+
+            with col_qr:
+                st.markdown("### 📱 QR Code")
+                st.image(qr_bytes, caption="Escaneie para verificar", use_column_width=True)
+                st.download_button(
+                    "📥 Baixar QR Code",
+                    data=qr_bytes,
+                    file_name=f"qr-selo-veraz-{hash_conteudo[:12]}.png",
+                    mime="image/png",
+                    use_container_width=True
+                )
+
+            with col_info:
+                st.markdown("### 📌 Compartilhamento")
+                st.caption("Use o link ou o QR Code para validar o conteúdo publicamente.")
+
+                st.markdown("### 🧩 Badge HTML")
+                st.code(badge_html, language="html")
+
+                st.download_button(
+                    "📥 Baixar badge HTML",
+                    data=badge_html,
+                    file_name=f"badge-selo-veraz-{hash_conteudo[:12]}.html",
+                    mime="text/html",
+                    use_container_width=True
+                )
+
+            st.markdown("### 🏛️ Certificado visual")
+            exibir_certificado_visual(metadados, link_publico)
 
             if registrar_github:
                 if not github_token:
@@ -470,14 +615,29 @@ if page == "🔐 Gerar Selo":
             with st.expander("📦 Metadados JSON"):
                 st.json(metadados)
 
+            with st.expander("📜 Certificado JSON"):
+                st.json(certificado)
+
             json_str = json.dumps(metadados, indent=2, ensure_ascii=False)
-            st.download_button(
-                "📥 Baixar JSON",
-                data=json_str,
-                file_name=f"selo-{hash_conteudo[:12]}.json",
-                mime="application/json",
-                use_container_width=True
-            )
+            certificado_str = json.dumps(certificado, indent=2, ensure_ascii=False)
+
+            col_d1, col_d2 = st.columns(2)
+            with col_d1:
+                st.download_button(
+                    "📥 Baixar metadados JSON",
+                    data=json_str,
+                    file_name=f"selo-{hash_conteudo[:12]}.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+            with col_d2:
+                st.download_button(
+                    "📥 Baixar certificado JSON",
+                    data=certificado_str,
+                    file_name=f"certificado-selo-veraz-{hash_conteudo[:12]}.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
 
 # ============================================
 # PÁGINA 2 — VERIFICAR SELO
@@ -532,6 +692,19 @@ elif page == "🔍 Verificar Selo":
                             )
                             exibir_resultado_verificacao_publica(resultado)
 
+                            if resultado["encontrado"]:
+                                link_publico = gerar_link_verificacao(hash_input)
+                                qr_bytes = gerar_qr_code_bytes(link_publico)
+
+                                st.markdown("### 🏛️ Certificado visual")
+                                exibir_certificado_visual(resultado["metadados"], link_publico)
+
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.image(qr_bytes, caption="QR do selo", use_column_width=True)
+                                with col2:
+                                    st.code(gerar_badge_html(hash_input), language="html")
+
                 else:
                     if not github_token:
                         st.error("❌ Configure o token GitHub na sidebar.")
@@ -558,13 +731,21 @@ elif page == "🔍 Verificar Selo":
                                         st.markdown("### 📦 Metadados")
                                         st.json(resultado["metadados"])
 
+                                        link_publico = gerar_link_verificacao(hash_input)
+                                        qr_bytes = gerar_qr_code_bytes(link_publico)
+
+                                        st.markdown("### 🏛️ Certificado visual")
+                                        exibir_certificado_visual(resultado["metadados"], link_publico)
+
                                         col1, col2 = st.columns(2)
                                         with col1:
                                             if resultado.get("arquivo_url"):
                                                 st.link_button("📄 Ver arquivo", resultado["arquivo_url"], use_container_width=True)
+                                            st.image(qr_bytes, caption="QR do selo", use_column_width=True)
                                         with col2:
                                             if resultado.get("historico"):
                                                 st.link_button("🔗 Último commit", resultado["historico"][0]["url"], use_container_width=True)
+                                            st.code(gerar_badge_html(hash_input), language="html")
 
                                         if resultado.get("historico"):
                                             with st.expander("📜 Histórico"):
@@ -681,9 +862,18 @@ elif page == "📊 Meus Selos":
                                         st.json(conteudo_json)
                                         st.code(conteudo_json.get("hash", ""), language="text")
 
+                                        hash_item = conteudo_json.get("hash", "")
+                                        link_verificacao = gerar_link_verificacao(hash_item)
+
+                                        col_a, col_b = st.columns(2)
+                                        with col_a:
+                                            st.code(link_verificacao, language="text")
+                                        with col_b:
+                                            st.code(gerar_badge_html(hash_item), language="html")
+
                                         if github_username:
                                             links_publicos = gerar_links_publicos(
-                                                conteudo_json.get("hash", ""),
+                                                hash_item,
                                                 github_username,
                                                 github_repo_name
                                             )
