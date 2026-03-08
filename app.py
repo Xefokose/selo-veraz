@@ -6,6 +6,7 @@ from github import Github, GithubException
 import requests
 import qrcode
 from io import BytesIO
+import pandas as pd
 
 # ============================================
 # CONFIGURAÇÃO INICIAL
@@ -19,7 +20,7 @@ SELOS_DIR = "selos"
 st.set_page_config(
     page_title=APP_NAME,
     page_icon="🏷️",
-    layout="centered",
+    layout="wide",
     initial_sidebar_state="collapsed",
     menu_items={"About": f"{APP_NAME} © 2026 - {APP_TAGLINE}"}
 )
@@ -30,6 +31,45 @@ st.set_page_config(
 
 st.markdown("""
 <style>
+    .hero-box {
+        background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 55%, #2d5a87 100%);
+        color: white;
+        padding: 28px;
+        border-radius: 20px;
+        margin: 10px 0 24px 0;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.18);
+    }
+    .hero-title {
+        font-size: 2rem;
+        font-weight: 800;
+        margin-bottom: 6px;
+    }
+    .hero-sub {
+        opacity: 0.92;
+        font-size: 1rem;
+    }
+    .metric-card {
+        background: white;
+        padding: 18px;
+        border-radius: 16px;
+        border: 1px solid #e5e7eb;
+        box-shadow: 0 4px 18px rgba(0,0,0,0.05);
+        color: #111827;
+    }
+    .metric-title {
+        font-size: 0.92rem;
+        color: #6b7280;
+        margin-bottom: 8px;
+    }
+    .metric-value {
+        font-size: 1.75rem;
+        font-weight: 800;
+    }
+    .metric-helper {
+        margin-top: 6px;
+        color: #4b5563;
+        font-size: 0.9rem;
+    }
     .selo-card {
         background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%);
         padding: 2rem;
@@ -143,14 +183,29 @@ st.markdown("""
         margin: 10px 0;
         border-radius: 10px;
     }
-    .badge-code {
-        background: #111827;
-        color: #e5e7eb;
-        padding: 12px;
-        border-radius: 10px;
-        font-family: monospace;
-        font-size: 0.9rem;
-        overflow-wrap: break-word;
+    .summary-box {
+        background: #ffffff;
+        color: #111827;
+        border: 1px solid #e5e7eb;
+        border-radius: 16px;
+        padding: 18px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.04);
+        margin: 12px 0;
+    }
+    .status-pill {
+        display: inline-block;
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-weight: 700;
+        font-size: 0.85rem;
+    }
+    .status-active {
+        background: #dcfce7;
+        color: #166534;
+    }
+    .status-archived {
+        background: #f3f4f6;
+        color: #374151;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -209,7 +264,7 @@ def gerar_metadados(
         "tipo": tipo,
         "data_criacao_utc": agora,
         "tamanho_bytes": len(conteudo.encode("utf-8")),
-        "versao": "1.3.0",
+        "versao": "1.4.0",
         "plataforma": APP_NAME
     }
 
@@ -275,10 +330,7 @@ def gerar_links_publicos(hash_value: str, username: str, repo_name: str):
     filename = montar_nome_arquivo(hash_value)
     raw_url = f"https://raw.githubusercontent.com/{username}/{repo_name}/main/{filename}"
     blob_url = f"https://github.com/{username}/{repo_name}/blob/main/{filename}"
-    return {
-        "raw_url": raw_url,
-        "blob_url": blob_url
-    }
+    return {"raw_url": raw_url, "blob_url": blob_url}
 
 
 def gerar_link_verificacao(hash_value: str):
@@ -442,7 +494,6 @@ def exibir_resultado_verificacao_publica(resultado: dict):
             <p>Este hash não foi encontrado no registro público.</p>
         </div>
         """, unsafe_allow_html=True)
-
         st.caption(resultado.get("mensagem", "Nenhuma informação adicional."))
 
 
@@ -576,6 +627,110 @@ def exibir_linha_historica(grupo):
 
     st.markdown('</div>', unsafe_allow_html=True)
 
+
+def montar_dataframe_selos(lista_selos):
+    if not lista_selos:
+        return pd.DataFrame()
+
+    linhas = []
+    for item in lista_selos:
+        linhas.append({
+            "content_name": item.get("content_name", ""),
+            "content_id": item.get("content_id", ""),
+            "version": item.get("version", 0),
+            "hash": item.get("hash", ""),
+            "previous_hash": item.get("previous_hash", ""),
+            "autor": item.get("autor", ""),
+            "tipo": item.get("tipo", ""),
+            "data_criacao_utc": item.get("data_criacao_utc", ""),
+            "tamanho_bytes": item.get("tamanho_bytes", 0),
+            "versao_sistema": item.get("versao", ""),
+            "plataforma": item.get("plataforma", ""),
+            "link_verificacao": gerar_link_verificacao(item.get("hash", ""))
+        })
+    return pd.DataFrame(linhas)
+
+
+def montar_resumo_dashboard(lista_selos):
+    if not lista_selos:
+        return {
+            "total_selos": 0,
+            "total_linhas": 0,
+            "total_autores": 0,
+            "total_tipos": 0,
+            "media_versoes_por_linha": 0,
+            "ultimo_registro": None,
+            "maior_linha": None
+        }
+
+    grupos = agrupar_por_content_id(lista_selos)
+    total_selos = len(lista_selos)
+    total_linhas = len(grupos)
+    total_autores = len(set([s.get("autor", "Anônimo") for s in lista_selos]))
+    total_tipos = len(set([s.get("tipo", "Outro") for s in lista_selos]))
+    media_versoes = round(total_selos / total_linhas, 2) if total_linhas else 0
+
+    ultimo_registro = sorted(
+        lista_selos,
+        key=lambda x: normalizar_data(x.get("data_criacao_utc", "")),
+        reverse=True
+    )[0]
+
+    maior_linha = sorted(
+        grupos.items(),
+        key=lambda x: len(x[1]),
+        reverse=True
+    )[0] if grupos else None
+
+    return {
+        "total_selos": total_selos,
+        "total_linhas": total_linhas,
+        "total_autores": total_autores,
+        "total_tipos": total_tipos,
+        "media_versoes_por_linha": media_versoes,
+        "ultimo_registro": ultimo_registro,
+        "maior_linha": maior_linha
+    }
+
+
+def contar_top_autores(lista_selos, limite=5):
+    contagem = {}
+    for item in lista_selos:
+        autor = item.get("autor", "Anônimo")
+        contagem[autor] = contagem.get(autor, 0) + 1
+    return sorted(contagem.items(), key=lambda x: x[1], reverse=True)[:limite]
+
+
+def contar_top_tipos(lista_selos, limite=5):
+    contagem = {}
+    for item in lista_selos:
+        tipo = item.get("tipo", "Outro")
+        contagem[tipo] = contagem.get(tipo, 0) + 1
+    return sorted(contagem.items(), key=lambda x: x[1], reverse=True)[:limite]
+
+
+def montar_linhas_consolidadas(lista_selos):
+    grupos = agrupar_por_content_id(lista_selos)
+    linhas = []
+
+    for content_id, grupo in grupos.items():
+        grupo_ordenado = sorted(grupo, key=lambda x: x.get("version", 0))
+        mais_recente = grupo_ordenado[-1]
+        linhas.append({
+            "content_id": content_id,
+            "content_name": mais_recente.get("content_name", "Sem nome"),
+            "autor": mais_recente.get("autor", "Anônimo"),
+            "tipo": mais_recente.get("tipo", "Outro"),
+            "ultima_versao": mais_recente.get("version", 1),
+            "hash_atual": mais_recente.get("hash", ""),
+            "data_ultima_versao": mais_recente.get("data_criacao_utc", ""),
+            "total_versoes": len(grupo_ordenado),
+            "status": "Ativo"
+        })
+
+    return sorted(linhas, key=lambda x: normalizar_data(x["data_ultima_versao"]), reverse=True)
+
+
 # ============================================
 # QUERY PARAMS
 # ============================================
@@ -594,8 +749,8 @@ except Exception:
 st.sidebar.markdown(f"### 🏷️ {APP_NAME}")
 page = st.sidebar.radio(
     "Navegação:",
-    ["🔐 Gerar Selo", "🔍 Verificar Selo", "📊 Meus Selos"],
-    index=1 if query_hash else 0
+    ["🏠 Dashboard", "🔐 Gerar Selo", "🔍 Verificar Selo", "📊 Meus Selos"],
+    index=2 if query_hash else 0
 )
 
 with st.sidebar:
@@ -617,15 +772,197 @@ with st.sidebar:
     st.caption(app_base_url)
 
     st.markdown("---")
-    st.markdown("### 📊 Estatísticas")
+    st.markdown("### 📊 Sessão")
     st.metric("Selos Gerados", st.session_state["selos_gerados"])
     st.metric("Verificações", st.session_state["verificacoes_feitas"])
 
 # ============================================
-# PÁGINA 1 — GERAR SELO
+# CARREGAMENTO GLOBAL DO REPOSITÓRIO
 # ============================================
 
-if page == "🔐 Gerar Selo":
+repo_global = None
+todos_selos_global = []
+erro_repo_global = None
+
+if github_token:
+    g_global, user_global, erro_global = get_github_client(github_token)
+    if not erro_global:
+        repo_global, erro_repo_global = get_repo(user_global, github_repo_name)
+        if repo_global:
+            todos_selos_global = carregar_todos_selos_repo(repo_global)
+
+# ============================================
+# PÁGINA 1 — DASHBOARD
+# ============================================
+
+if page == "🏠 Dashboard":
+    st.markdown(f"""
+    <div class="hero-box">
+        <div class="hero-title">🏷️ {APP_NAME}</div>
+        <div class="hero-sub">{APP_TAGLINE}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("## Visão geral da plataforma")
+
+    if not github_token:
+        st.warning("⚠️ Configure o token GitHub na sidebar para carregar o dashboard.")
+    elif erro_repo_global and not repo_global:
+        st.error(f"❌ Não foi possível acessar o repositório: {erro_repo_global}")
+    elif not todos_selos_global:
+        st.info("📭 Nenhum selo encontrado ainda. Gere seus primeiros registros para alimentar o dashboard.")
+    else:
+        resumo = montar_resumo_dashboard(todos_selos_global)
+        linhas_consolidadas = montar_linhas_consolidadas(todos_selos_global)
+        df_selos = montar_dataframe_selos(todos_selos_global)
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Total de Selos</div>
+                <div class="metric-value">{resumo['total_selos']}</div>
+                <div class="metric-helper">Registros imutáveis criados</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with c2:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Linhas Históricas</div>
+                <div class="metric-value">{resumo['total_linhas']}</div>
+                <div class="metric-helper">Conteúdos acompanhados</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with c3:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Autores</div>
+                <div class="metric-value">{resumo['total_autores']}</div>
+                <div class="metric-helper">Origens distintas</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with c4:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Tipos</div>
+                <div class="metric-value">{resumo['total_tipos']}</div>
+                <div class="metric-helper">Categorias registradas</div>
+            </div>
+            """, unsafe_allow_html=True)
+        with c5:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Média de Versões</div>
+                <div class="metric-value">{resumo['media_versoes_por_linha']}</div>
+                <div class="metric-helper">Evolução por conteúdo</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("## Resumo executivo")
+
+        col_a, col_b = st.columns([2, 1])
+
+        with col_a:
+            ultimo = resumo["ultimo_registro"]
+            if ultimo:
+                st.markdown("""
+                <div class="summary-box">
+                """, unsafe_allow_html=True)
+                st.markdown("### Último registro")
+                st.write(f"**Conteúdo:** {ultimo.get('content_name', 'Sem nome')}")
+                st.write(f"**Autor:** {ultimo.get('autor', 'Anônimo')}")
+                st.write(f"**Tipo:** {ultimo.get('tipo', 'Outro')}")
+                st.write(f"**Versão:** {ultimo.get('version', 1)}")
+                st.write(f"**Data UTC:** {ultimo.get('data_criacao_utc', 'N/D')}")
+                st.code(ultimo.get("hash", ""), language="text")
+                st.markdown("</div>", unsafe_allow_html=True)
+
+        with col_b:
+            maior_linha = resumo["maior_linha"]
+            if maior_linha:
+                cid, grupo = maior_linha
+                nome = grupo[-1].get("content_name", "Sem nome")
+                st.markdown("""
+                <div class="summary-box">
+                """, unsafe_allow_html=True)
+                st.markdown("### Linha histórica com mais versões")
+                st.write(f"**Conteúdo:** {nome}")
+                st.write(f"**Content ID:** `{cid}`")
+                st.write(f"**Versões registradas:** {len(grupo)}")
+                st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("## Distribuição operacional")
+
+        col_top1, col_top2 = st.columns(2)
+
+        with col_top1:
+            st.markdown("### Top autores")
+            top_autores = contar_top_autores(todos_selos_global, limite=10)
+            if top_autores:
+                for autor, qtd in top_autores:
+                    st.write(f"**{autor}** — {qtd} selo(s)")
+            else:
+                st.info("Sem dados.")
+
+        with col_top2:
+            st.markdown("### Top tipos")
+            top_tipos = contar_top_tipos(todos_selos_global, limite=10)
+            if top_tipos:
+                for tipo, qtd in top_tipos:
+                    st.write(f"**{tipo}** — {qtd} selo(s)")
+            else:
+                st.info("Sem dados.")
+
+        st.markdown("## Exportações")
+
+        col_exp1, col_exp2 = st.columns(2)
+        with col_exp1:
+            csv_bytes = df_selos.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "📥 Exportar todos os selos em CSV",
+                data=csv_bytes,
+                file_name="selo-veraz-selos.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        with col_exp2:
+            json_bytes = json.dumps(todos_selos_global, indent=2, ensure_ascii=False).encode("utf-8")
+            st.download_button(
+                "📥 Exportar todos os selos em JSON",
+                data=json_bytes,
+                file_name="selo-veraz-selos.json",
+                mime="application/json",
+                use_container_width=True
+            )
+
+        st.markdown("## Últimos registros")
+        ultimos = sorted(
+            todos_selos_global,
+            key=lambda x: normalizar_data(x.get("data_criacao_utc", "")),
+            reverse=True
+        )[:10]
+
+        if ultimos:
+            df_ultimos = pd.DataFrame([{
+                "Conteúdo": x.get("content_name", ""),
+                "Autor": x.get("autor", ""),
+                "Tipo": x.get("tipo", ""),
+                "Versão": x.get("version", 1),
+                "Data UTC": x.get("data_criacao_utc", ""),
+                "Hash": x.get("hash", "")
+            } for x in ultimos])
+            st.dataframe(df_ultimos, use_container_width=True)
+
+        st.markdown("## Linhas históricas consolidadas")
+        if linhas_consolidadas:
+            df_linhas = pd.DataFrame(linhas_consolidadas)
+            st.dataframe(df_linhas, use_container_width=True)
+
+# ============================================
+# PÁGINA 2 — GERAR SELO
+# ============================================
+
+elif page == "🔐 Gerar Selo":
     st.title("🔐 Gerar Selo Veraz")
     st.markdown("Crie uma impressão digital imutável com versionamento real.")
 
@@ -664,15 +1001,7 @@ if page == "🔐 Gerar Selo":
     content_id_final = ""
     previous_hash_final = ""
 
-    todos_selos = []
-    repo = None
-
-    if github_token:
-        g, user, erro = get_github_client(github_token)
-        if not erro:
-            repo, _ = get_or_create_repo(user, github_repo_name)
-            if repo:
-                todos_selos = carregar_todos_selos_repo(repo)
+    todos_selos = todos_selos_global if todos_selos_global else []
 
     if modo_registro == "🆕 Novo conteúdo":
         st.info("Você está criando uma nova linha histórica.")
@@ -871,7 +1200,7 @@ if page == "🔐 Gerar Selo":
                 )
 
 # ============================================
-# PÁGINA 2 — VERIFICAR SELO
+# PÁGINA 3 — VERIFICAR SELO
 # ============================================
 
 elif page == "🔍 Verificar Selo":
@@ -1051,7 +1380,7 @@ elif page == "🔍 Verificar Selo":
                     st.error("❌ URL inválida.")
 
 # ============================================
-# PÁGINA 3 — MEUS SELOS
+# PÁGINA 4 — MEUS SELOS
 # ============================================
 
 elif page == "📊 Meus Selos":
@@ -1060,89 +1389,119 @@ elif page == "📊 Meus Selos":
 
     if not github_token:
         st.warning("⚠️ Configure o token GitHub na sidebar para listar seus selos.")
+    elif erro_repo_global and not repo_global:
+        st.error(f"❌ Não foi possível acessar o repositório: {erro_repo_global}")
     else:
-        with st.spinner("🔄 Carregando seus selos..."):
-            g, user, erro = get_github_client(github_token)
+        todos_selos = todos_selos_global
 
-            if erro:
-                st.error(erro)
-            else:
-                repo, repo_error = get_repo(user, github_repo_name)
+        if not todos_selos:
+            st.info("📭 Nenhum selo registrado ainda.")
+        else:
+            autores = sorted(list({s.get("autor", "Anônimo") for s in todos_selos}))
+            tipos = sorted(list({s.get("tipo", "Outro") for s in todos_selos}))
 
-                if repo:
-                    todos_selos = carregar_todos_selos_repo(repo)
+            st.success(f"✅ {len(todos_selos)} selo(s) encontrado(s)")
 
-                    if not todos_selos:
-                        st.info("📭 Nenhum selo registrado ainda.")
-                    else:
-                        autores = sorted(list({s.get("autor", "Anônimo") for s in todos_selos}))
-                        tipos = sorted(list({s.get("tipo", "Outro") for s in todos_selos}))
+            col_f1, col_f2, col_f3 = st.columns(3)
+            with col_f1:
+                busca_nome = st.text_input("Buscar por nome do conteúdo:")
+            with col_f2:
+                filtro_autor = st.selectbox("Filtrar por autor:", ["Todos"] + autores)
+            with col_f3:
+                filtro_tipo = st.selectbox("Filtrar por tipo:", ["Todos"] + tipos)
 
-                        st.success(f"✅ {len(todos_selos)} selo(s) encontrado(s)")
+            selos_filtrados = filtrar_selos(
+                todos_selos,
+                busca_nome=busca_nome,
+                filtro_autor=filtro_autor,
+                filtro_tipo=filtro_tipo
+            )
 
-                        col_f1, col_f2, col_f3 = st.columns(3)
-                        with col_f1:
-                            busca_nome = st.text_input("Buscar por nome do conteúdo:")
-                        with col_f2:
-                            filtro_autor = st.selectbox("Filtrar por autor:", ["Todos"] + autores)
-                        with col_f3:
-                            filtro_tipo = st.selectbox("Filtrar por tipo:", ["Todos"] + tipos)
+            grupos = agrupar_por_content_id(selos_filtrados)
+            linhas_consolidadas = montar_linhas_consolidadas(selos_filtrados)
 
-                        selos_filtrados = filtrar_selos(
-                            todos_selos,
-                            busca_nome=busca_nome,
-                            filtro_autor=filtro_autor,
-                            filtro_tipo=filtro_tipo
+            st.markdown("## Resumo filtrado")
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("Selos filtrados", len(selos_filtrados))
+            with c2:
+                st.metric("Linhas filtradas", len(grupos))
+            with c3:
+                media = round(len(selos_filtrados) / len(grupos), 2) if grupos else 0
+                st.metric("Média de versões", media)
+
+            if linhas_consolidadas:
+                st.markdown("## Visão consolidada")
+                df_linhas = pd.DataFrame(linhas_consolidadas)
+                st.dataframe(df_linhas, use_container_width=True)
+
+                col_e1, col_e2 = st.columns(2)
+                with col_e1:
+                    st.download_button(
+                        "📥 Exportar linhas filtradas em CSV",
+                        data=df_linhas.to_csv(index=False).encode("utf-8"),
+                        file_name="selo-veraz-linhas-filtradas.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+                with col_e2:
+                    st.download_button(
+                        "📥 Exportar linhas filtradas em JSON",
+                        data=json.dumps(linhas_consolidadas, indent=2, ensure_ascii=False).encode("utf-8"),
+                        file_name="selo-veraz-linhas-filtradas.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+
+            st.markdown("## Linhas históricas")
+
+            for content_id, grupo in grupos.items():
+                grupo_ordenado = sorted(grupo, key=lambda x: x.get("version", 0), reverse=True)
+                mais_recente = grupo_ordenado[0]
+                titulo = f"🏷️ {mais_recente.get('content_name', 'Sem nome')} — {mais_recente.get('autor', 'Anônimo')} — {len(grupo)} versão(ões)"
+
+                with st.expander(titulo):
+                    st.markdown(
+                        '<span class="status-pill status-active">Versão mais recente ativa</span>',
+                        unsafe_allow_html=True
+                    )
+
+                    exibir_linha_historica(sorted(grupo, key=lambda x: x.get("version", 0)))
+
+                    st.markdown("### 📄 Versão mais recente")
+                    st.json(mais_recente)
+
+                    hash_item = mais_recente.get("hash", "")
+                    link_verificacao = gerar_link_verificacao(hash_item)
+                    qr_bytes = gerar_qr_code_bytes(link_verificacao)
+
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        st.code(link_verificacao, language="text")
+                        st.image(qr_bytes, caption="QR da versão atual", use_column_width=True)
+                    with col_b:
+                        st.code(gerar_badge_html(hash_item), language="html")
+                        st.write(f"**Content ID:** `{mais_recente.get('content_id', '')}`")
+                        st.write(f"**Última versão:** `{mais_recente.get('version', 1)}`")
+
+                    if github_username:
+                        links_publicos = gerar_links_publicos(
+                            hash_item,
+                            github_username,
+                            github_repo_name
                         )
-
-                        st.markdown("### 📚 Linhas históricas")
-                        grupos = agrupar_por_content_id(selos_filtrados)
-
-                        st.write(f"**Total de linhas históricas filtradas:** {len(grupos)}")
-
-                        for content_id, grupo in grupos.items():
-                            grupo_ordenado = sorted(
-                                grupo,
-                                key=lambda x: x.get("version", 0),
-                                reverse=True
-                            )
-                            mais_recente = grupo_ordenado[0]
-                            titulo = f"🏷️ {mais_recente.get('content_name', 'Sem nome')} — {mais_recente.get('autor', 'Anônimo')} — {len(grupo)} versão(ões)"
-
-                            with st.expander(titulo):
-                                exibir_linha_historica(sorted(grupo, key=lambda x: x.get("version", 0)))
-
-                                st.markdown("### 📄 Versão mais recente")
-                                st.json(mais_recente)
-
-                                hash_item = mais_recente.get("hash", "")
-                                link_verificacao = gerar_link_verificacao(hash_item)
-
-                                col_a, col_b = st.columns(2)
-                                with col_a:
-                                    st.code(link_verificacao, language="text")
-                                with col_b:
-                                    st.code(gerar_badge_html(hash_item), language="html")
-
-                                if github_username:
-                                    links_publicos = gerar_links_publicos(
-                                        hash_item,
-                                        github_username,
-                                        github_repo_name
-                                    )
-                                    st.link_button(
-                                        "🌐 Ver público",
-                                        links_publicos["blob_url"],
-                                        use_container_width=True
-                                    )
-                                else:
-                                    st.link_button(
-                                        "🔗 Ver no GitHub",
-                                        f"{repo.html_url}/blob/main/{mais_recente.get('_path', '')}",
-                                        use_container_width=True
-                                    )
-                else:
-                    st.error(f"❌ Não foi possível acessar o repositório: {repo_error}")
+                        st.link_button(
+                            "🌐 Ver público",
+                            links_publicos["blob_url"],
+                            use_container_width=True
+                        )
+                    else:
+                        st.link_button(
+                            "🔗 Ver no GitHub",
+                            f"{repo_global.html_url}/blob/main/{mais_recente.get('_path', '')}",
+                            use_container_width=True
+                        )
 
 # ============================================
 # FOOTER
