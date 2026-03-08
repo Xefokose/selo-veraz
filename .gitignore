@@ -8,12 +8,12 @@ env/
 venv/
 .venv/
 
-# Streamlit
-.streamlit/
+# Logs
 *.log
 
 # Secrets
 .env
+.streamlit/secrets.toml
 secrets.toml
 
 # OS
