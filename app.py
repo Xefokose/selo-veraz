@@ -5,21 +5,15 @@ from datetime import datetime
 from github import Github
 import requests
 
-# Configuração da página (atualizada)
+# Configuração da página (única chamada, otimizada)
 st.set_page_config(
     page_title="Selo Veraz",
     page_icon="🏷️",
-    layout="centered",  # Melhor para mobile
-    initial_sidebar_state="collapsed",  # Sidebar fechada por padrão no mobile
+    layout="centered",
+    initial_sidebar_state="collapsed",
     menu_items={
         "About": "Selo Veraz © 2026 - A verdade tem marca."
     }
-)
-# Configuração da página
-st.set_page_config(
-    page_title="Selo Veraz",
-    page_icon="🏷️",
-    layout="wide"
 )
 
 # CSS Personalizado
@@ -202,7 +196,7 @@ def buscar_selo_por_hash(repo, hash_value: str) -> dict:
         # Buscar histórico de commits deste arquivo
         commits = list(repo.get_commits(path=filename))
         historico = []
-        for commit in commits[:10]:  # Últimos 10 commits
+        for commit in commits[:10]:
             historico.append({
                 "data": commit.commit.author.date.isoformat(),
                 "mensagem": commit.commit.message,
@@ -260,10 +254,10 @@ if page == "🔐 Gerar Selo":
             </div>
             """, unsafe_allow_html=True)
             
+            # ✅ CORREÇÃO: st.code() já tem botão de copiar nativo
             st.markdown("### 🔑 Hash SHA-256")
             st.code(hash_conteudo, language="text")
-            st.copy_to_clipboard(hash_conteudo)
-            st.success("✅ Hash copiado!")
+            st.caption("💡 Clique no ícone 📋 no canto direito do bloco acima para copiar")
             
             if registrar_github and github_token:
                 with st.spinner("🔄 Registrando no GitHub..."):
@@ -303,8 +297,6 @@ elif page == "🔍 Verificar Selo":
         ["🔑 Por Hash", "📝 Por Conteúdo", "🔗 Por URL do Commit"]
     )
     
-    resultado_verificacao = None
-    
     # --- Método 1: Por Hash ---
     if metodo == "🔑 Por Hash":
         hash_input = st.text_input(
@@ -335,7 +327,8 @@ elif page == "🔍 Verificar Selo":
                             if resultado["historico"]:
                                 with st.expander("📜 Histórico de Versões"):
                                     for h in resultado["historico"]:
-                                        st.markdown(f"- **{h['data'][:10]}**: {h['mensagem']} [{link}]({h['url']})")
+                                        # ✅ CORREÇÃO: variável 'link' substituída por h['url']
+                                        st.markdown(f"- **{h['data'][:10]}**: {h['mensagem']} [🔗]({h['url']})")
                         else:
                             st.markdown(f"""
                             <div class="verification-box">
@@ -367,99 +360,4 @@ elif page == "🔍 Verificar Selo":
         
         if st.button("🔍 Verificar Autenticidade", type="primary"):
             if conteudo_atual and hash_original:
-                st.session_state["verificacoes_feitas"] = st.session_state.get("verificacoes_feitas", 0) + 1
-                
-                hash_atual = gerar_hash_conteudo(conteudo_atual)
-                corresponde = hash_atual == hash_original
-                
-                if corresponde:
-                    st.markdown(f"""
-                    <div class="verification-box">
-                        <div class="status-verified">✅ CONTEÚDO AUTÊNTICO</div>
-                        <p>O conteúdo não foi alterado desde a criação do selo</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.markdown(f"""
-                    <div class="verification-box">
-                        <div class="status-tampered">❌ CONTEÚDO ALTERADO</div>
-                        <p>O conteúdo foi modificado! Hash não corresponde.</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    st.markdown("### Comparação de Hashes")
-                    col_h1, col_h2 = st.columns(2)
-                    with col_h1:
-                        st.code(hash_original, language="text")
-                        st.caption("Hash Original")
-                    with col_h2:
-                        st.code(hash_atual, language="text")
-                        st.caption("Hash Atual")
-            else:
-                st.warning("⚠️ Preencha ambos os campos")
-    
-    # --- Método 3: Por URL ---
-    elif metodo == "🔗 Por URL do Commit":
-        url_commit = st.text_input(
-            "URL do Commit GitHub:",
-            placeholder="Ex: https://github.com/usuario/repo/commit/abc123..."
-        )
-        
-        if st.button("🔍 Validar URL", type="primary"):
-            if url_commit and github_token:
-                st.session_state["verificacoes_feitas"] = st.session_state.get("verificacoes_feitas", 0) + 1
-                
-                try:
-                    # Extrair info da URL
-                    if "github.com" in url_commit and "/commit/" in url_commit:
-                        st.success("✅ URL válida do GitHub")
-                        st.info("🔗 Abra o link para ver os metadados do commit")
-                        st.link_button("🌐 Abrir Commit", url_commit)
-                    else:
-                        st.error("❌ URL inválida")
-                except:
-                    st.error("❌ Erro ao validar URL")
-            else:
-                st.warning("⚠️ Preencha a URL")
-
-# ============================================
-# PÁGINA 3: MEUS SELOS
-# ============================================
-elif page == "📊 Meus Selos":
-    st.title("📊 Meus Selos Registrados")
-    st.markdown("Visualize todos os selos que você registrou.")
-    
-    if github_token and github_username:
-        with st.spinner("🔄 Carregando seus selos..."):
-            repo, _ = criar_repo_github(github_token, github_username)
-            
-            if repo:
-                try:
-                    # Buscar todos os arquivos na pasta selos/
-                    conteudos = repo.get_contents("selos")
-                    
-                    if conteudos:
-                        st.success(f"✅ {len(conteudos)} selos encontrados")
-                        
-                        for item in conteudos[:20]:  # Limitar a 20
-                            try:
-                                conteudo_json = json.loads(item.decoded_content.decode('utf-8'))
-                                
-                                with st.expander(f"🏷️ {conteudo_json.get('tipo', 'Desconhecido')} - {conteudo_json.get('autor', 'Anônimo')}"):
-                                    st.json(conteudo_json)
-                                    st.code(conteudo_json.get('hash', ''), language="text")
-                                    st.link_button("🔗 Ver no GitHub", f"{repo.html_url}/blob/main/{item.path}")
-                            except:
-                                pass
-                    else:
-                        st.info("📭 Nenhum selo registrado ainda")
-                except:
-                    st.info("📭 Nenhum selo registrado ainda")
-            else:
-                st.warning("⚠️ Configure o token GitHub")
-    else:
-        st.warning("⚠️ Configure o token GitHub para ver seus selos")
-
-# --- Footer ---
-st.markdown("---")
-st.caption("🏷️ **Selo Veraz** © 2026 • A verdade tem marca.")
+                st.session
