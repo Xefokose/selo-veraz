@@ -128,6 +128,21 @@ st.markdown("""
         overflow-wrap: break-word;
         margin-top: 10px;
     }
+    .history-box {
+        background: #f8fafc;
+        color: #111;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 14px;
+        margin: 12px 0;
+    }
+    .timeline-step {
+        background: #ffffff;
+        border-left: 4px solid #1e3a5f;
+        padding: 12px;
+        margin: 10px 0;
+        border-radius: 10px;
+    }
     .badge-code {
         background: #111827;
         color: #e5e7eb;
@@ -167,16 +182,34 @@ def gerar_hash_conteudo(conteudo: str) -> str:
     return hashlib.sha256(conteudo.encode("utf-8")).hexdigest()
 
 
-def gerar_metadados(conteudo: str, autor: str, tipo: str, hash_value: str) -> dict:
+def gerar_content_id(content_name: str, autor: str, tipo: str) -> str:
+    base = f"{content_name.strip().lower()}|{autor.strip().lower()}|{tipo.strip().lower()}"
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()[:24]
+
+
+def gerar_metadados(
+    conteudo: str,
+    autor: str,
+    tipo: str,
+    hash_value: str,
+    content_name: str,
+    content_id: str,
+    version: int,
+    previous_hash: str
+) -> dict:
     agora = datetime.utcnow().isoformat() + "Z"
     return {
         "id": hash_value,
         "hash": hash_value,
+        "content_id": content_id,
+        "content_name": content_name.strip() if content_name.strip() else "Conteúdo sem nome",
+        "version": version,
+        "previous_hash": previous_hash.strip() if previous_hash.strip() else None,
         "autor": autor.strip() if autor.strip() else "Anônimo",
         "tipo": tipo,
         "data_criacao_utc": agora,
         "tamanho_bytes": len(conteudo.encode("utf-8")),
-        "versao": "1.2.0",
+        "versao": "1.3.0",
         "plataforma": APP_NAME
     }
 
@@ -259,14 +292,9 @@ def gerar_badge_html(hash_value: str):
 
 
 def gerar_qr_code_bytes(texto: str):
-    qr = qrcode.QRCode(
-        version=1,
-        box_size=10,
-        border=4
-    )
+    qr = qrcode.QRCode(version=1, box_size=10, border=4)
     qr.add_data(texto)
     qr.make(fit=True)
-
     img = qr.make_image(fill_color="black", back_color="white")
     buffer = BytesIO()
     img.save(buffer, format="PNG")
@@ -275,12 +303,16 @@ def gerar_qr_code_bytes(texto: str):
 
 
 def gerar_certificado_publico(metadados: dict, link_verificacao: str):
-    certificado = {
+    return {
         "selo_veraz": {
             "status": "verificado",
             "tagline": APP_TAGLINE,
             "id": metadados.get("id"),
             "hash": metadados.get("hash"),
+            "content_id": metadados.get("content_id"),
+            "content_name": metadados.get("content_name"),
+            "version": metadados.get("version"),
+            "previous_hash": metadados.get("previous_hash"),
             "autor": metadados.get("autor"),
             "tipo": metadados.get("tipo"),
             "data_criacao_utc": metadados.get("data_criacao_utc"),
@@ -290,7 +322,6 @@ def gerar_certificado_publico(metadados: dict, link_verificacao: str):
             "link_verificacao": link_verificacao
         }
     }
-    return certificado
 
 
 def commit_selo_github(repo, hash_value: str, metadados: dict):
@@ -306,14 +337,14 @@ def commit_selo_github(repo, hash_value: str, metadados: dict):
             existing = repo.get_contents(filename)
             repo.update_file(
                 path=filename,
-                message=f"🏷️ Atualiza Selo Veraz: {metadados['tipo']} - {metadados['autor']}",
+                message=f"🏷️ Atualiza Selo Veraz v{metadados.get('version', 1)}: {metadados['tipo']} - {metadados['autor']}",
                 content=arquivo_conteudo,
                 sha=existing.sha
             )
         except GithubException:
             repo.create_file(
                 path=filename,
-                message=f"🏷️ Novo Selo Veraz: {metadados['tipo']} - {metadados['autor']}",
+                message=f"🏷️ Novo Selo Veraz v{metadados.get('version', 1)}: {metadados['tipo']} - {metadados['autor']}",
                 content=arquivo_conteudo
             )
 
@@ -367,29 +398,22 @@ def buscar_selo_por_hash_publico(hash_value: str, username: str, repo_name: str)
         response = requests.get(links["raw_url"], timeout=15)
 
         if response.status_code == 200:
-            conteudo_json = response.json()
             return {
                 "encontrado": True,
-                "metadados": conteudo_json,
+                "metadados": response.json(),
                 "arquivo_url": links["blob_url"],
                 "raw_url": links["raw_url"]
             }
 
         if response.status_code == 404:
-            return {
-                "encontrado": False,
-                "mensagem": "Hash não encontrado no registro público"
-            }
+            return {"encontrado": False, "mensagem": "Hash não encontrado no registro público"}
 
         return {
             "encontrado": False,
             "mensagem": f"Erro público ao consultar GitHub: HTTP {response.status_code}"
         }
     except Exception as e:
-        return {
-            "encontrado": False,
-            "mensagem": f"Erro na verificação pública: {str(e)}"
-        }
+        return {"encontrado": False, "mensagem": f"Erro na verificação pública: {str(e)}"}
 
 
 def exibir_resultado_verificacao_publica(resultado: dict):
@@ -432,11 +456,15 @@ def exibir_certificado_visual(metadados: dict, link_verificacao: str):
         <div class="cert-subtitle">{APP_TAGLINE}</div>
 
         <div class="cert-line"><strong>Status:</strong> Verificado</div>
+        <div class="cert-line"><strong>Nome do conteúdo:</strong> {metadados.get("content_name", "N/D")}</div>
+        <div class="cert-line"><strong>Content ID:</strong> {metadados.get("content_id", "N/D")}</div>
+        <div class="cert-line"><strong>Versão:</strong> {metadados.get("version", "N/D")}</div>
+        <div class="cert-line"><strong>Hash anterior:</strong> {metadados.get("previous_hash", "Nenhum")}</div>
         <div class="cert-line"><strong>Autor:</strong> {metadados.get("autor", "Anônimo")}</div>
         <div class="cert-line"><strong>Tipo:</strong> {metadados.get("tipo", "N/D")}</div>
         <div class="cert-line"><strong>Data UTC:</strong> {metadados.get("data_criacao_utc", "N/D")}</div>
         <div class="cert-line"><strong>Tamanho:</strong> {metadados.get("tamanho_bytes", 0)} bytes</div>
-        <div class="cert-line"><strong>Versão:</strong> {metadados.get("versao", "N/D")}</div>
+        <div class="cert-line"><strong>Versão do sistema:</strong> {metadados.get("versao", "N/D")}</div>
         <div class="cert-line"><strong>Hash resumido:</strong> {hash_curto}</div>
 
         <div style="margin-top: 16px;"><strong>Link de verificação:</strong></div>
@@ -446,6 +474,107 @@ def exibir_certificado_visual(metadados: dict, link_verificacao: str):
         <div class="hash-box">{hash_value}</div>
     </div>
     """, unsafe_allow_html=True)
+
+
+def normalizar_data(data_str: str):
+    try:
+        return datetime.fromisoformat(data_str.replace("Z", "+00:00"))
+    except Exception:
+        return datetime.min
+
+
+def carregar_todos_selos_repo(repo):
+    dados = []
+    try:
+        conteudos = repo.get_contents(SELOS_DIR)
+        arquivos_json = [c for c in conteudos if c.name.endswith(".json")]
+
+        for item in arquivos_json:
+            try:
+                conteudo_json = json.loads(item.decoded_content.decode("utf-8"))
+                conteudo_json["_path"] = item.path
+                dados.append(conteudo_json)
+            except Exception:
+                continue
+    except Exception:
+        return []
+
+    return dados
+
+
+def agrupar_por_content_id(lista_selos):
+    grupos = {}
+    for selo in lista_selos:
+        cid = selo.get("content_id", "sem-content-id")
+        if cid not in grupos:
+            grupos[cid] = []
+        grupos[cid].append(selo)
+
+    for cid in grupos:
+        grupos[cid] = sorted(
+            grupos[cid],
+            key=lambda x: (x.get("version", 0), normalizar_data(x.get("data_criacao_utc", "")))
+        )
+    return grupos
+
+
+def obter_proxima_versao_e_hash_anterior(lista_selos, content_id: str):
+    relacionados = [s for s in lista_selos if s.get("content_id") == content_id]
+
+    if not relacionados:
+        return 1, ""
+
+    relacionados_ordenados = sorted(
+        relacionados,
+        key=lambda x: (x.get("version", 0), normalizar_data(x.get("data_criacao_utc", "")))
+    )
+    ultimo = relacionados_ordenados[-1]
+    return int(ultimo.get("version", 1)) + 1, ultimo.get("hash", "")
+
+
+def filtrar_selos(lista_selos, busca_nome="", filtro_autor="", filtro_tipo=""):
+    resultado = lista_selos
+
+    if busca_nome.strip():
+        termo = busca_nome.strip().lower()
+        resultado = [s for s in resultado if termo in str(s.get("content_name", "")).lower()]
+
+    if filtro_autor and filtro_autor != "Todos":
+        resultado = [s for s in resultado if s.get("autor") == filtro_autor]
+
+    if filtro_tipo and filtro_tipo != "Todos":
+        resultado = [s for s in resultado if s.get("tipo") == filtro_tipo]
+
+    return sorted(
+        resultado,
+        key=lambda x: normalizar_data(x.get("data_criacao_utc", "")),
+        reverse=True
+    )
+
+
+def exibir_linha_historica(grupo):
+    if not grupo:
+        return
+
+    st.markdown('<div class="history-box">', unsafe_allow_html=True)
+    st.markdown(f"**Linha histórica:** {grupo[0].get('content_name', 'Sem nome')}")
+    st.markdown(f"**Content ID:** `{grupo[0].get('content_id', 'N/D')}`")
+    st.markdown(f"**Total de versões:** {len(grupo)}")
+
+    for item in grupo:
+        previous_hash = item.get("previous_hash") or "Nenhum"
+        st.markdown(f"""
+        <div class="timeline-step">
+            <strong>Versão {item.get("version", "N/D")}</strong><br>
+            <strong>Hash:</strong> <code>{item.get("hash", "")}</code><br>
+            <strong>Hash anterior:</strong> <code>{previous_hash}</code><br>
+            <strong>Autor:</strong> {item.get("autor", "Anônimo")}<br>
+            <strong>Tipo:</strong> {item.get("tipo", "N/D")}<br>
+            <strong>Data:</strong> {item.get("data_criacao_utc", "N/D")}
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # ============================================
 # QUERY PARAMS
@@ -498,7 +627,7 @@ with st.sidebar:
 
 if page == "🔐 Gerar Selo":
     st.title("🔐 Gerar Selo Veraz")
-    st.markdown("Crie uma impressão digital imutável, gere certificado visual e registre no GitHub.")
+    st.markdown("Crie uma impressão digital imutável com versionamento real.")
 
     col1, col2 = st.columns([3, 1])
 
@@ -517,14 +646,114 @@ if page == "🔐 Gerar Selo":
         autor = st.text_input("Autor:", placeholder="Nome ou organização")
         registrar_github = st.checkbox("Registrar no GitHub", value=True)
 
+    st.markdown("### 🧬 Estrutura do conteúdo")
+    modo_registro = st.radio(
+        "Como deseja registrar?",
+        ["🆕 Novo conteúdo", "🔁 Nova versão de conteúdo existente"],
+        horizontal=True
+    )
+
+    content_name = st.text_input(
+        "Nome do conteúdo:",
+        placeholder="Ex: Nota oficial sobre resultado trimestral"
+    )
+
+    content_id_manual = ""
+    previous_hash_manual = ""
+    version_final = 1
+    content_id_final = ""
+    previous_hash_final = ""
+
+    todos_selos = []
+    repo = None
+
+    if github_token:
+        g, user, erro = get_github_client(github_token)
+        if not erro:
+            repo, _ = get_or_create_repo(user, github_repo_name)
+            if repo:
+                todos_selos = carregar_todos_selos_repo(repo)
+
+    if modo_registro == "🆕 Novo conteúdo":
+        st.info("Você está criando uma nova linha histórica.")
+        if content_name.strip():
+            content_id_preview = gerar_content_id(content_name, autor, tipo_conteudo)
+            st.code(content_id_preview, language="text")
+            content_id_final = content_id_preview
+        else:
+            st.caption("Digite um nome de conteúdo para gerar o content_id.")
+
+        version_final = 1
+        previous_hash_final = ""
+
+    else:
+        st.info("Você está registrando uma nova versão de uma linha histórica já existente.")
+
+        if todos_selos:
+            opcoes = sorted(
+                list({f"{s.get('content_name', 'Sem nome')} | {s.get('content_id', '')}" for s in todos_selos})
+            )
+
+            selecao = st.selectbox(
+                "Selecione a linha histórica existente:",
+                options=opcoes
+            )
+
+            if selecao:
+                partes = selecao.split(" | ")
+                nome_existente = partes[0].strip()
+                cid_existente = partes[1].strip() if len(partes) > 1 else ""
+
+                if not content_name.strip():
+                    content_name = nome_existente
+
+                content_id_final = cid_existente
+                proxima_versao, hash_anterior = obter_proxima_versao_e_hash_anterior(todos_selos, cid_existente)
+                version_final = proxima_versao
+                previous_hash_final = hash_anterior
+
+                st.markdown("### 📌 Dados da próxima versão")
+                st.write(f"**Content ID:** `{content_id_final}`")
+                st.write(f"**Próxima versão:** `{version_final}`")
+                st.write(f"**Hash anterior:** `{previous_hash_final or 'Nenhum'}`")
+        else:
+            st.warning("⚠️ Nenhum conteúdo anterior encontrado. Cadastre primeiro um novo conteúdo.")
+            content_id_manual = st.text_input("Content ID manual:", placeholder="Cole um content_id existente")
+            previous_hash_manual = st.text_input("Hash anterior manual:", placeholder="Cole o hash da versão anterior")
+            version_final = st.number_input("Versão", min_value=1, value=1, step=1)
+
+            content_id_final = content_id_manual.strip()
+            previous_hash_final = previous_hash_manual.strip()
+
     if st.button("🔐 Gerar Selo", type="primary", use_container_width=True):
         if not texto.strip():
             st.warning("⚠️ Digite um conteúdo antes de gerar o selo.")
+        elif not content_name.strip():
+            st.warning("⚠️ Informe o nome do conteúdo.")
         else:
+            if modo_registro == "🆕 Novo conteúdo":
+                content_id_final = gerar_content_id(content_name, autor, tipo_conteudo)
+                version_final = 1
+                previous_hash_final = ""
+            else:
+                if not content_id_final:
+                    st.warning("⚠️ Não foi possível determinar o content_id da versão.")
+                    st.stop()
+
             st.session_state["selos_gerados"] += 1
 
             hash_conteudo = gerar_hash_conteudo(texto)
-            metadados = gerar_metadados(texto, autor, tipo_conteudo, hash_conteudo)
+            metadados = gerar_metadados(
+                conteudo=texto,
+                autor=autor,
+                tipo=tipo_conteudo,
+                hash_value=hash_conteudo,
+                content_name=content_name,
+                content_id=content_id_final,
+                version=int(version_final),
+                previous_hash=previous_hash_final
+            )
+
             link_publico = gerar_link_verificacao(hash_conteudo)
             badge_html = gerar_badge_html(hash_conteudo)
             qr_bytes = gerar_qr_code_bytes(link_publico)
@@ -538,8 +767,17 @@ if page == "🔐 Gerar Selo":
             </div>
             """, unsafe_allow_html=True)
 
-            st.markdown("### 🔑 Hash SHA-256")
-            st.code(hash_conteudo, language="text")
+            col_res1, col_res2 = st.columns(2)
+            with col_res1:
+                st.markdown("### 🔑 Hash SHA-256")
+                st.code(hash_conteudo, language="text")
+                st.markdown("### 🧬 Content ID")
+                st.code(content_id_final, language="text")
+            with col_res2:
+                st.markdown("### 🔢 Versão")
+                st.code(str(version_final), language="text")
+                st.markdown("### ↩️ Hash anterior")
+                st.code(previous_hash_final or "Nenhum", language="text")
 
             st.markdown("### 🔗 Link completo de verificação")
             st.code(link_publico, language="text")
@@ -558,12 +796,8 @@ if page == "🔐 Gerar Selo":
                 )
 
             with col_info:
-                st.markdown("### 📌 Compartilhamento")
-                st.caption("Use o link ou o QR Code para validar o conteúdo publicamente.")
-
                 st.markdown("### 🧩 Badge HTML")
                 st.code(badge_html, language="html")
-
                 st.download_button(
                     "📥 Baixar badge HTML",
                     data=badge_html,
@@ -618,14 +852,11 @@ if page == "🔐 Gerar Selo":
             with st.expander("📜 Certificado JSON"):
                 st.json(certificado)
 
-            json_str = json.dumps(metadados, indent=2, ensure_ascii=False)
-            certificado_str = json.dumps(certificado, indent=2, ensure_ascii=False)
-
             col_d1, col_d2 = st.columns(2)
             with col_d1:
                 st.download_button(
                     "📥 Baixar metadados JSON",
-                    data=json_str,
+                    data=json.dumps(metadados, indent=2, ensure_ascii=False),
                     file_name=f"selo-{hash_conteudo[:12]}.json",
                     mime="application/json",
                     use_container_width=True
@@ -633,7 +864,7 @@ if page == "🔐 Gerar Selo":
             with col_d2:
                 st.download_button(
                     "📥 Baixar certificado JSON",
-                    data=certificado_str,
+                    data=json.dumps(certificado, indent=2, ensure_ascii=False),
                     file_name=f"certificado-selo-veraz-{hash_conteudo[:12]}.json",
                     mime="application/json",
                     use_container_width=True
@@ -748,7 +979,7 @@ elif page == "🔍 Verificar Selo":
                                             st.code(gerar_badge_html(hash_input), language="html")
 
                                         if resultado.get("historico"):
-                                            with st.expander("📜 Histórico"):
+                                            with st.expander("📜 Histórico de commits"):
                                                 for h in resultado["historico"]:
                                                     st.markdown(f"- **{h['data'][:10]}** — {h['mensagem']} [abrir]({h['url']})")
                                     else:
@@ -765,23 +996,16 @@ elif page == "🔍 Verificar Selo":
         col1, col2 = st.columns(2)
 
         with col1:
-            conteudo_atual = st.text_area(
-                "Conteúdo para verificar:",
-                height=220
-            )
+            conteudo_atual = st.text_area("Conteúdo para verificar:", height=220)
 
         with col2:
-            hash_original = st.text_input(
-                "Hash original:",
-                placeholder="Cole o hash original"
-            )
+            hash_original = st.text_input("Hash original:", placeholder="Cole o hash original")
 
         if st.button("🔍 Verificar autenticidade", type="primary"):
             if not conteudo_atual.strip() or not hash_original.strip():
                 st.warning("⚠️ Preencha o conteúdo e o hash original.")
             else:
                 st.session_state["verificacoes_feitas"] += 1
-
                 hash_atual = gerar_hash_conteudo(conteudo_atual)
                 corresponde = hash_atual == hash_original.strip()
 
@@ -800,7 +1024,6 @@ elif page == "🔍 Verificar Selo":
                     </div>
                     """, unsafe_allow_html=True)
 
-                    st.markdown("### Comparação")
                     c1, c2 = st.columns(2)
                     with c1:
                         st.caption("Hash Original")
@@ -833,7 +1056,7 @@ elif page == "🔍 Verificar Selo":
 
 elif page == "📊 Meus Selos":
     st.title("📊 Meus Selos Registrados")
-    st.markdown("Visualize os registros armazenados no seu repositório GitHub.")
+    st.markdown("Visualize, filtre e acompanhe a evolução dos seus conteúdos.")
 
     if not github_token:
         st.warning("⚠️ Configure o token GitHub na sidebar para listar seus selos.")
@@ -847,53 +1070,77 @@ elif page == "📊 Meus Selos":
                 repo, repo_error = get_repo(user, github_repo_name)
 
                 if repo:
-                    try:
-                        conteudos = repo.get_contents(SELOS_DIR)
-                        arquivos_json = [c for c in conteudos if c.name.endswith(".json")]
+                    todos_selos = carregar_todos_selos_repo(repo)
 
-                        if arquivos_json:
-                            st.success(f"✅ {len(arquivos_json)} selo(s) encontrado(s)")
+                    if not todos_selos:
+                        st.info("📭 Nenhum selo registrado ainda.")
+                    else:
+                        autores = sorted(list({s.get("autor", "Anônimo") for s in todos_selos}))
+                        tipos = sorted(list({s.get("tipo", "Outro") for s in todos_selos}))
 
-                            for item in arquivos_json[:50]:
-                                try:
-                                    conteudo_json = json.loads(item.decoded_content.decode("utf-8"))
-                                    titulo = f"🏷️ {conteudo_json.get('tipo', 'Desconhecido')} — {conteudo_json.get('autor', 'Anônimo')}"
-                                    with st.expander(titulo):
-                                        st.json(conteudo_json)
-                                        st.code(conteudo_json.get("hash", ""), language="text")
+                        st.success(f"✅ {len(todos_selos)} selo(s) encontrado(s)")
 
-                                        hash_item = conteudo_json.get("hash", "")
-                                        link_verificacao = gerar_link_verificacao(hash_item)
+                        col_f1, col_f2, col_f3 = st.columns(3)
+                        with col_f1:
+                            busca_nome = st.text_input("Buscar por nome do conteúdo:")
+                        with col_f2:
+                            filtro_autor = st.selectbox("Filtrar por autor:", ["Todos"] + autores)
+                        with col_f3:
+                            filtro_tipo = st.selectbox("Filtrar por tipo:", ["Todos"] + tipos)
 
-                                        col_a, col_b = st.columns(2)
-                                        with col_a:
-                                            st.code(link_verificacao, language="text")
-                                        with col_b:
-                                            st.code(gerar_badge_html(hash_item), language="html")
+                        selos_filtrados = filtrar_selos(
+                            todos_selos,
+                            busca_nome=busca_nome,
+                            filtro_autor=filtro_autor,
+                            filtro_tipo=filtro_tipo
+                        )
 
-                                        if github_username:
-                                            links_publicos = gerar_links_publicos(
-                                                hash_item,
-                                                github_username,
-                                                github_repo_name
-                                            )
-                                            st.link_button(
-                                                "🌐 Ver público",
-                                                links_publicos["blob_url"],
-                                                use_container_width=True
-                                            )
-                                        else:
-                                            st.link_button(
-                                                "🔗 Ver no GitHub",
-                                                f"{repo.html_url}/blob/main/{item.path}",
-                                                use_container_width=True
-                                            )
-                                except Exception:
-                                    st.warning(f"⚠️ Erro ao ler {item.name}")
-                        else:
-                            st.info("📭 Nenhum selo registrado ainda.")
-                    except Exception:
-                        st.info("📭 A pasta de selos ainda não existe ou está vazia.")
+                        st.markdown("### 📚 Linhas históricas")
+                        grupos = agrupar_por_content_id(selos_filtrados)
+
+                        st.write(f"**Total de linhas históricas filtradas:** {len(grupos)}")
+
+                        for content_id, grupo in grupos.items():
+                            grupo_ordenado = sorted(
+                                grupo,
+                                key=lambda x: x.get("version", 0),
+                                reverse=True
+                            )
+                            mais_recente = grupo_ordenado[0]
+                            titulo = f"🏷️ {mais_recente.get('content_name', 'Sem nome')} — {mais_recente.get('autor', 'Anônimo')} — {len(grupo)} versão(ões)"
+
+                            with st.expander(titulo):
+                                exibir_linha_historica(sorted(grupo, key=lambda x: x.get("version", 0)))
+
+                                st.markdown("### 📄 Versão mais recente")
+                                st.json(mais_recente)
+
+                                hash_item = mais_recente.get("hash", "")
+                                link_verificacao = gerar_link_verificacao(hash_item)
+
+                                col_a, col_b = st.columns(2)
+                                with col_a:
+                                    st.code(link_verificacao, language="text")
+                                with col_b:
+                                    st.code(gerar_badge_html(hash_item), language="html")
+
+                                if github_username:
+                                    links_publicos = gerar_links_publicos(
+                                        hash_item,
+                                        github_username,
+                                        github_repo_name
+                                    )
+                                    st.link_button(
+                                        "🌐 Ver público",
+                                        links_publicos["blob_url"],
+                                        use_container_width=True
+                                    )
+                                else:
+                                    st.link_button(
+                                        "🔗 Ver no GitHub",
+                                        f"{repo.html_url}/blob/main/{mais_recente.get('_path', '')}",
+                                        use_container_width=True
+                                    )
                 else:
                     st.error(f"❌ Não foi possível acessar o repositório: {repo_error}")
 
