@@ -3,6 +3,7 @@ import hashlib
 import json
 from datetime import datetime
 from github import Github, GithubException
+import requests
 
 # ============================================
 # CONFIGURAÇÃO INICIAL
@@ -52,6 +53,7 @@ st.markdown("""
         border-radius: 10px;
         font-weight: bold;
         font-size: 1.1rem;
+        text-align: center;
     }
     .status-tampered {
         background: #ff5252;
@@ -60,6 +62,7 @@ st.markdown("""
         border-radius: 10px;
         font-weight: bold;
         font-size: 1.1rem;
+        text-align: center;
     }
     .status-notfound {
         background: #ff9800;
@@ -68,6 +71,7 @@ st.markdown("""
         border-radius: 10px;
         font-weight: bold;
         font-size: 1.1rem;
+        text-align: center;
     }
     .verification-box {
         background: #f5f5f5;
@@ -80,6 +84,14 @@ st.markdown("""
     .mini-muted {
         opacity: 0.85;
         font-size: 0.9rem;
+    }
+    .public-box {
+        background: #eef7ff;
+        color: #111;
+        padding: 16px;
+        border-radius: 10px;
+        border-left: 5px solid #1976d2;
+        margin: 15px 0;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -95,38 +107,12 @@ if "verificacoes_feitas" not in st.session_state:
     st.session_state["verificacoes_feitas"] = 0
 
 # ============================================
-# SIDEBAR
+# SECRETS / CONFIG
 # ============================================
 
-st.sidebar.markdown(f"### 🏷️ {APP_NAME}")
-page = st.sidebar.radio(
-    "Navegação:",
-    ["🔐 Gerar Selo", "🔍 Verificar Selo", "📊 Meus Selos"],
-    index=0
-)
-
-with st.sidebar:
-    st.markdown("---")
-    st.markdown("### 🔑 Configuração GitHub")
-
-    github_token = st.secrets["GITHUB_TOKEN"] if "GITHUB_TOKEN" in st.secrets else ""
-    github_username = st.secrets["GITHUB_USERNAME"] if "GITHUB_USERNAME" in st.secrets else ""
-    github_repo_name = st.secrets["GITHUB_REPO"] if "GITHUB_REPO" in st.secrets else DEFAULT_REPO_NAME
-
-    if github_token:
-        st.success("✅ Token GitHub configurado")
-    else:
-        github_token = st.text_input("Token GitHub:", type="password")
-
-    if github_username:
-        st.info(f"👤 Usuário: {github_username}")
-    else:
-        github_username = st.text_input("Usuário GitHub:")
-
-    st.markdown("---")
-    st.markdown("### 📊 Estatísticas")
-    st.metric("Selos Gerados", st.session_state["selos_gerados"])
-    st.metric("Verificações", st.session_state["verificacoes_feitas"])
+github_token = st.secrets["GITHUB_TOKEN"] if "GITHUB_TOKEN" in st.secrets else ""
+github_username = st.secrets["GITHUB_USERNAME"] if "GITHUB_USERNAME" in st.secrets else ""
+github_repo_name = st.secrets["GITHUB_REPO"] if "GITHUB_REPO" in st.secrets else DEFAULT_REPO_NAME
 
 # ============================================
 # FUNÇÕES UTILITÁRIAS
@@ -145,9 +131,13 @@ def gerar_metadados(conteudo: str, autor: str, tipo: str, hash_value: str) -> di
         "tipo": tipo,
         "data_criacao_utc": agora,
         "tamanho_bytes": len(conteudo.encode("utf-8")),
-        "versao": "1.0.0",
+        "versao": "1.1.0",
         "plataforma": APP_NAME
     }
+
+
+def montar_nome_arquivo(hash_value: str) -> str:
+    return f"{SELOS_DIR}/{hash_value}.json"
 
 
 def get_github_client(token: str):
@@ -203,8 +193,21 @@ def garantir_pasta_selos(repo):
             return False, f"Erro ao criar pasta selos/: {str(e)}"
 
 
-def montar_nome_arquivo(hash_value: str) -> str:
-    return f"{SELOS_DIR}/{hash_value}.json"
+def gerar_links_publicos(hash_value: str, username: str, repo_name: str):
+    filename = montar_nome_arquivo(hash_value)
+    raw_url = f"https://raw.githubusercontent.com/{username}/{repo_name}/main/{filename}"
+    blob_url = f"https://github.com/{username}/{repo_name}/blob/main/{filename}"
+    return {
+        "raw_url": raw_url,
+        "blob_url": blob_url
+    }
+
+
+def gerar_link_verificacao(hash_value: str):
+    base_url = st.query_params.get("base_url", "")
+    if base_url:
+        return f"{base_url}?hash={hash_value}"
+    return f"?hash={hash_value}"
 
 
 def commit_selo_github(repo, hash_value: str, metadados: dict):
@@ -274,6 +277,108 @@ def buscar_selo_por_hash_autenticado(repo, hash_value: str):
     except Exception as e:
         return {"encontrado": False, "mensagem": f"Erro na busca: {str(e)}"}
 
+
+def buscar_selo_por_hash_publico(hash_value: str, username: str, repo_name: str):
+    try:
+        links = gerar_links_publicos(hash_value, username, repo_name)
+        response = requests.get(links["raw_url"], timeout=15)
+
+        if response.status_code == 200:
+            conteudo_json = response.json()
+            return {
+                "encontrado": True,
+                "metadados": conteudo_json,
+                "arquivo_url": links["blob_url"],
+                "raw_url": links["raw_url"]
+            }
+
+        if response.status_code == 404:
+            return {
+                "encontrado": False,
+                "mensagem": "Hash não encontrado no registro público"
+            }
+
+        return {
+            "encontrado": False,
+            "mensagem": f"Erro público ao consultar GitHub: HTTP {response.status_code}"
+        }
+    except Exception as e:
+        return {
+            "encontrado": False,
+            "mensagem": f"Erro na verificação pública: {str(e)}"
+        }
+
+
+def exibir_resultado_verificacao_publica(resultado: dict):
+    if resultado["encontrado"]:
+        st.markdown("""
+        <div class="verification-box">
+            <div class="status-verified">✅ CONTEÚDO VERIFICADO</div>
+            <p>Este hash está registrado publicamente no Selo Veraz.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("### 📦 Metadados públicos")
+        st.json(resultado["metadados"])
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if resultado.get("arquivo_url"):
+                st.link_button("📄 Ver JSON público", resultado["arquivo_url"], use_container_width=True)
+        with col2:
+            if resultado.get("raw_url"):
+                st.link_button("🌐 Ver RAW público", resultado["raw_url"], use_container_width=True)
+    else:
+        st.markdown("""
+        <div class="verification-box">
+            <div class="status-notfound">⚠️ NÃO ENCONTRADO</div>
+            <p>Este hash não foi encontrado no registro público.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.caption(resultado.get("mensagem", "Nenhuma informação adicional."))
+
+# ============================================
+# QUERY PARAMS
+# ============================================
+
+query_hash = ""
+try:
+    if "hash" in st.query_params:
+        query_hash = str(st.query_params["hash"]).strip()
+except Exception:
+    query_hash = ""
+
+# ============================================
+# SIDEBAR
+# ============================================
+
+st.sidebar.markdown(f"### 🏷️ {APP_NAME}")
+page = st.sidebar.radio(
+    "Navegação:",
+    ["🔐 Gerar Selo", "🔍 Verificar Selo", "📊 Meus Selos"],
+    index=1 if query_hash else 0
+)
+
+with st.sidebar:
+    st.markdown("---")
+    st.markdown("### 🔑 Configuração GitHub")
+
+    if github_token:
+        st.success("✅ Token GitHub configurado")
+    else:
+        github_token = st.text_input("Token GitHub:", type="password")
+
+    if github_username:
+        st.info(f"👤 Usuário: {github_username}")
+    else:
+        github_username = st.text_input("Usuário GitHub público:")
+
+    st.markdown("---")
+    st.markdown("### 📊 Estatísticas")
+    st.metric("Selos Gerados", st.session_state["selos_gerados"])
+    st.metric("Verificações", st.session_state["verificacoes_feitas"])
+
 # ============================================
 # PÁGINA 1 — GERAR SELO
 # ============================================
@@ -320,6 +425,11 @@ if page == "🔐 Gerar Selo":
             st.code(hash_conteudo, language="text")
             st.caption("💡 Clique no ícone 📋 no canto do bloco para copiar")
 
+            link_publico = gerar_link_verificacao(hash_conteudo)
+            st.markdown("### 🔗 Link de verificação")
+            st.code(link_publico, language="text")
+            st.caption("Esse link poderá ser compartilhado para verificação pública.")
+
             if registrar_github:
                 if not github_token:
                     st.warning("⚠️ Configure o token GitHub na sidebar para registrar no repositório.")
@@ -338,6 +448,13 @@ if page == "🔐 Gerar Selo":
 
                                 if resultado["success"]:
                                     st.success("✅ Registrado no GitHub com sucesso!")
+
+                                    if github_username:
+                                        links_publicos = gerar_links_publicos(hash_conteudo, github_username, github_repo_name)
+                                        with st.expander("🌐 Links públicos do selo"):
+                                            st.code(links_publicos["blob_url"], language="text")
+                                            st.code(links_publicos["raw_url"], language="text")
+
                                     col_a, col_b, col_c = st.columns(3)
                                     with col_a:
                                         st.link_button("🔗 Ver Commit", resultado["commit_url"], use_container_width=True)
@@ -368,7 +485,15 @@ if page == "🔐 Gerar Selo":
 
 elif page == "🔍 Verificar Selo":
     st.title("🔍 Verificar Selo Veraz")
-    st.markdown("Valide se um conteúdo é autêntico ou foi alterado.")
+    st.markdown("Valide se um conteúdo é autêntico, registrado ou alterado.")
+
+    if query_hash:
+        st.markdown("""
+        <div class="public-box">
+            <strong>🔗 Verificação aberta por link público</strong><br>
+            O hash foi carregado automaticamente pela URL.
+        </div>
+        """, unsafe_allow_html=True)
 
     metodo = st.radio(
         "Método de verificação:",
@@ -378,60 +503,82 @@ elif page == "🔍 Verificar Selo":
     if metodo == "🔑 Por Hash":
         hash_input = st.text_input(
             "Hash SHA-256:",
+            value=query_hash,
             placeholder="Cole aqui o hash completo"
         )
 
-        if st.button("🔍 Buscar no GitHub", type="primary"):
+        modo_busca = st.radio(
+            "Modo de busca:",
+            ["🌐 Público", "🔐 Autenticado"],
+            horizontal=True
+        )
+
+        if st.button("🔍 Buscar selo", type="primary"):
             if not hash_input.strip():
                 st.warning("⚠️ Digite um hash para buscar.")
-            elif not github_token:
-                st.error("❌ Configure o token GitHub na sidebar.")
             else:
                 st.session_state["verificacoes_feitas"] += 1
+                hash_input = hash_input.strip()
 
-                with st.spinner("🔍 Buscando no GitHub..."):
-                    g, user, erro = get_github_client(github_token)
-
-                    if erro:
-                        st.error(erro)
+                if modo_busca == "🌐 Público":
+                    if not github_username:
+                        st.error("❌ Defina o GITHUB_USERNAME nos secrets ou na sidebar.")
                     else:
-                        repo, repo_error = get_repo(user, github_repo_name)
+                        with st.spinner("🌐 Consultando registro público..."):
+                            resultado = buscar_selo_por_hash_publico(
+                                hash_input,
+                                github_username,
+                                github_repo_name
+                            )
+                            exibir_resultado_verificacao_publica(resultado)
 
-                        if repo:
-                            resultado = buscar_selo_por_hash_autenticado(repo, hash_input.strip())
+                else:
+                    if not github_token:
+                        st.error("❌ Configure o token GitHub na sidebar.")
+                    else:
+                        with st.spinner("🔐 Buscando no GitHub autenticado..."):
+                            g, user, erro = get_github_client(github_token)
 
-                            if resultado["encontrado"]:
-                                st.markdown("""
-                                <div class="verification-box">
-                                    <div class="status-verified">✅ CONTEÚDO VERIFICADO</div>
-                                    <p>Este hash está registrado no Selo Veraz.</p>
-                                </div>
-                                """, unsafe_allow_html=True)
-
-                                st.markdown("### 📦 Metadados")
-                                st.json(resultado["metadados"])
-
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    if resultado.get("arquivo_url"):
-                                        st.link_button("📄 Ver arquivo", resultado["arquivo_url"], use_container_width=True)
-                                with col2:
-                                    if resultado.get("historico"):
-                                        st.link_button("🔗 Último commit", resultado["historico"][0]["url"], use_container_width=True)
-
-                                if resultado.get("historico"):
-                                    with st.expander("📜 Histórico"):
-                                        for h in resultado["historico"]:
-                                            st.markdown(f"- **{h['data'][:10]}** — {h['mensagem']} [abrir]({h['url']})")
+                            if erro:
+                                st.error(erro)
                             else:
-                                st.markdown("""
-                                <div class="verification-box">
-                                    <div class="status-notfound">⚠️ NÃO ENCONTRADO</div>
-                                    <p>Este hash não está registrado no Selo Veraz.</p>
-                                </div>
-                                """, unsafe_allow_html=True)
-                        else:
-                            st.error(f"❌ Não foi possível acessar o repositório: {repo_error}")
+                                repo, repo_error = get_repo(user, github_repo_name)
+
+                                if repo:
+                                    resultado = buscar_selo_por_hash_autenticado(repo, hash_input)
+
+                                    if resultado["encontrado"]:
+                                        st.markdown("""
+                                        <div class="verification-box">
+                                            <div class="status-verified">✅ CONTEÚDO VERIFICADO</div>
+                                            <p>Este hash está registrado no Selo Veraz.</p>
+                                        </div>
+                                        """, unsafe_allow_html=True)
+
+                                        st.markdown("### 📦 Metadados")
+                                        st.json(resultado["metadados"])
+
+                                        col1, col2 = st.columns(2)
+                                        with col1:
+                                            if resultado.get("arquivo_url"):
+                                                st.link_button("📄 Ver arquivo", resultado["arquivo_url"], use_container_width=True)
+                                        with col2:
+                                            if resultado.get("historico"):
+                                                st.link_button("🔗 Último commit", resultado["historico"][0]["url"], use_container_width=True)
+
+                                        if resultado.get("historico"):
+                                            with st.expander("📜 Histórico"):
+                                                for h in resultado["historico"]:
+                                                    st.markdown(f"- **{h['data'][:10]}** — {h['mensagem']} [abrir]({h['url']})")
+                                    else:
+                                        st.markdown("""
+                                        <div class="verification-box">
+                                            <div class="status-notfound">⚠️ NÃO ENCONTRADO</div>
+                                            <p>Este hash não está registrado no Selo Veraz.</p>
+                                        </div>
+                                        """, unsafe_allow_html=True)
+                                else:
+                                    st.error(f"❌ Não foi possível acessar o repositório: {repo_error}")
 
     elif metodo == "📝 Por Conteúdo":
         col1, col2 = st.columns(2)
@@ -448,7 +595,7 @@ elif page == "🔍 Verificar Selo":
                 placeholder="Cole o hash original"
             )
 
-        if st.button("🔍 Verificar Autenticidade", type="primary"):
+        if st.button("🔍 Verificar autenticidade", type="primary"):
             if not conteudo_atual.strip() or not hash_original.strip():
                 st.warning("⚠️ Preencha o conteúdo e o hash original.")
             else:
@@ -533,16 +680,29 @@ elif page == "📊 Meus Selos":
                                     with st.expander(titulo):
                                         st.json(conteudo_json)
                                         st.code(conteudo_json.get("hash", ""), language="text")
-                                        st.link_button(
-                                            "🔗 Ver no GitHub",
-                                            f"{repo.html_url}/blob/main/{item.path}",
-                                            use_container_width=True
-                                        )
+
+                                        if github_username:
+                                            links_publicos = gerar_links_publicos(
+                                                conteudo_json.get("hash", ""),
+                                                github_username,
+                                                github_repo_name
+                                            )
+                                            st.link_button(
+                                                "🌐 Ver público",
+                                                links_publicos["blob_url"],
+                                                use_container_width=True
+                                            )
+                                        else:
+                                            st.link_button(
+                                                "🔗 Ver no GitHub",
+                                                f"{repo.html_url}/blob/main/{item.path}",
+                                                use_container_width=True
+                                            )
                                 except Exception:
                                     st.warning(f"⚠️ Erro ao ler {item.name}")
                         else:
                             st.info("📭 Nenhum selo registrado ainda.")
-                    except Exception as e:
+                    except Exception:
                         st.info("📭 A pasta de selos ainda não existe ou está vazia.")
                 else:
                     st.error(f"❌ Não foi possível acessar o repositório: {repo_error}")
