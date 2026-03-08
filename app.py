@@ -5,6 +5,16 @@ from datetime import datetime
 from github import Github
 import requests
 
+# Configuração da página (atualizada)
+st.set_page_config(
+    page_title="Selo Veraz",
+    page_icon="🏷️",
+    layout="centered",  # Melhor para mobile
+    initial_sidebar_state="collapsed",  # Sidebar fechada por padrão no mobile
+    menu_items={
+        "About": "Selo Veraz © 2026 - A verdade tem marca."
+    }
+)
 # Configuração da página
 st.set_page_config(
     page_title="Selo Veraz",
