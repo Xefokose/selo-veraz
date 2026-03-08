@@ -2,23 +2,25 @@
 
 > **A verdade tem marca.**
 
-Infraestrutura de confiança para a era digital. Gere e verifique impressões digitais imutáveis de qualquer conteúdo usando SHA-256 + GitHub Versioning.
+O Selo Veraz é uma infraestrutura de confiança digital criada com **Streamlit + GitHub** para gerar, registrar e verificar impressões digitais imutáveis de conteúdos digitais usando **SHA-256**.
 
-## 🚀 Como Usar
+## 🚀 O que o sistema faz
 
-1. Acesse
-2. Cole seu conteúdo
-3. Gere o Selo
-4. Compartilhe o hash para verificação
+- Gera hash SHA-256 de conteúdos
+- Cria metadados estruturados em JSON
+- Registra selos no GitHub
+- Permite verificar autenticidade de conteúdos
+- Mantém histórico público e rastreável
 
-## 🔧 Tecnologias
+## 🧱 Tecnologias
 
 - Python 3.10+
 - Streamlit
+- PyGithub
 - GitHub API
-- SHA-256 Cryptography
+- SHA-256
 
-## 📦 Instalação Local
+## 📦 Instalação local
 
 ```bash
 git clone https://github.com/seu-usuario/selo-veraz.git
